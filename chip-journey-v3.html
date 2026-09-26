@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>深入芯片 · 一趟硅之旅</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#020409;
+    font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; color:#dfeaff; }
+  #c { position:fixed; inset:0; width:100%; height:100%; display:block; }
+  .overlay { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; text-align:center; z-index:10; padding:24px;
+    background:radial-gradient(120% 100% at 50% 20%, rgba(8,20,44,.92) 0%, rgba(2,4,9,.97) 70%); }
+  .overlay h1 { font-size:clamp(30px,7vw,58px); font-weight:800; letter-spacing:.12em;
+    background:linear-gradient(180deg,#bff3ff,#38b6ff 60%,#7a5cff); -webkit-background-clip:text;
+    background-clip:text; color:transparent; text-shadow:0 0 42px rgba(56,182,255,.25); }
+  .overlay p.sub { margin-top:14px; font-size:clamp(13px,3.4vw,17px); color:#8fa3c8; letter-spacing:.28em; }
+  .overlay p.desc { margin-top:26px; max-width:560px; font-size:clamp(13px,3.6vw,15px);
+    line-height:1.9; color:#a9bcd9; }
+  #startBtn, #replayBtn { margin-top:34px; padding:14px 52px; font-size:17px; letter-spacing:.2em;
+    color:#02131f; font-weight:700; border:none; border-radius:999px; cursor:pointer;
+    background:linear-gradient(180deg,#8fe6ff,#38b6ff); box-shadow:0 0 28px rgba(56,182,255,.55); }
+  #startBtn:active, #replayBtn:active { transform:scale(.96); }
+  #end { display:none; }
+  #end h1 { font-size:clamp(26px,6vw,46px); }
+  #caption { position:fixed; left:0; right:0; bottom:9%; text-align:center; z-index:5;
+    pointer-events:none; opacity:0; transition:opacity .6s ease; padding:0 20px; }
+  #caption .t { font-size:clamp(22px,5.6vw,40px); font-weight:800; letter-spacing:.18em;
+    color:#eaf6ff; text-shadow:0 0 24px rgba(56,182,255,.8), 0 2px 12px rgba(0,0,0,.8); }
+  #caption .s { margin-top:8px; font-size:clamp(12px,3.2vw,16px); letter-spacing:.32em; color:#9fd8ff; }
+  #progressWrap { position:fixed; top:0; left:0; right:0; height:3px; z-index:6; background:rgba(255,255,255,.06); }
+  #progress { height:100%; width:0%; background:linear-gradient(90deg,#38b6ff,#7a5cff);
+    box-shadow:0 0 10px rgba(56,182,255,.8); }
+  #muteBtn { position:fixed; top:14px; right:14px; z-index:7; width:40px; height:40px; border-radius:50%;
+    border:1px solid rgba(159,216,255,.4); background:rgba(4,10,22,.55); color:#9fd8ff;
+    font-size:18px; cursor:pointer; display:none; align-items:center; justify-content:center; }
+  #err { position:fixed; left:12px; bottom:12px; z-index:20; max-width:90%; display:none;
+    background:rgba(80,10,10,.9); color:#ffd9d9; font-size:12px; padding:10px 14px; border-radius:8px; }
+  #hint { position:fixed; bottom:14px; left:0; right:0; text-align:center; z-index:5;
+    font-size:11px; letter-spacing:.2em; color:rgba(159,180,210,.55); pointer-events:none; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="progressWrap"><div id="progress"></div></div>
+<div id="caption"><div class="t"></div><div class="s"></div></div>
+<div id="hint">横屏体验更佳 · 全程约 55 秒</div>
+<button id="muteBtn" title="声音开关">🔊</button>
+
+<div id="start" class="overlay">
+  <h1>深入芯片</h1>
+  <p class="sub">一 趟 硅 之 旅</p>
+  <p class="desc">从数据中心出发，穿过机架与服务器，<br>拆下一块 GPU，钻进芯片，掠过晶体管森林，<br>最终抵达一颗硅原子。<br>全程单个 HTML 文件 · 浏览器实时渲染</p>
+  <button id="startBtn">开始旅程</button>
+</div>
+
+<div id="end" class="overlay">
+  <h1>旅程完成</h1>
+  <p class="sub">一 颗 原 子 · 撑 起 智 能 时 代</p>
+  <p class="desc">你刚才穿过的每一层，都真实存在于<br>你手机里那颗小小的芯片之中。</p>
+  <button id="replayBtn">再来一次</button>
+</div>
+<div id="err"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const errBox = document.getElementById('err');
+window.addEventListener('error', e => {
+  errBox.style.display = 'block';
+  errBox.textContent = '出错了：' + (e.message || e.type);
+});
+
+// ---------- 基础 ----------
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, powerPreference:'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x020409);
+scene.fog = new THREE.FogExp2(0x020409, 0.0038);
+
+const camera = new THREE.PerspectiveCamera(62, window.innerWidth/window.innerHeight, 0.1, 1200);
+camera.position.set(0, 7, 34);
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.6, 0.55, 0.5);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+scene.add(new THREE.HemisphereLight(0x3a5a8a, 0x05070a, 0.7));
+const dirLight = new THREE.DirectionalLight(0x8fb8ff, 0.5);
+dirLight.position.set(10, 30, 20);
+scene.add(dirLight);
+function pointLight(color, intensity, distance, x, y, z) {
+  const l = new THREE.PointLight(color, intensity, distance, 1.6);
+  l.position.set(x, y, z); scene.add(l); return l;
+}
+pointLight(0x38b6ff, 900, 120, 0, 9, -10);     // 机房冷光
+pointLight(0x38b6ff, 500, 70, 0, 6, -78);       // 服务器
+pointLight(0x7a5cff, 700, 80, 0, 8, -150);     // 显卡紫光
+pointLight(0xffb347, 600, 90, 0, 9, -228);     // 芯片暖光
+pointLight(0x38ffcc, 500, 80, 0, 8, -295);     // 晶体管青光
+pointLight(0xff7a1a, 700, 110, 0, 5, -372);   // 原子橙光
+
+// ---------- 工具 ----------
+function textTexture(text, opt={}) {
+  const { w=1024, h=256, fontSize=130, color='#9fe6ff', glow='rgba(56,182,255,.9)' } = opt;
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const g = cv.getContext('2d');
+  g.clearRect(0,0,w,h);
+  g.font = `800 ${fontSize}px system-ui, "PingFang SC", sans-serif`;
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.shadowColor = glow; g.shadowBlur = 34;
+  g.fillStyle = color;
+  g.fillText(text, w/2, h/2 + 4);
+  const t = new THREE.CanvasTexture(cv);
+  t.anisotropy = 4; t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+function radialTexture(inner='rgba(180,235,255,1)', outer='rgba(56,182,255,0)') {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+  const g = cv.getContext('2d');
+  const gr = g.createRadialGradient(128,128,8,128,128,128);
+  gr.addColorStop(0, inner); gr.addColorStop(1, outer);
+  g.fillStyle = gr; g.fillRect(0,0,256,256);
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const flashTex = radialTexture();
+const anim = { fans:[], electrons:[], shells:[], ledMat:null };
+
+// ---------- 地面 & 尘埃 ----------
+{
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(90, 480),
+    new THREE.MeshStandardMaterial({ color:0x04060b, roughness:.92, metalness:.1 })
+  );
+  floor.rotation.x = -Math.PI/2; floor.position.set(0, 0, -175);
+  scene.add(floor);
+  const grid = new THREE.GridHelper(170, 34, 0x14406a, 0x0a1c30);
+  grid.position.set(0, 0.03, -170); grid.scale.z = 2.75;
+  grid.material.transparent = true; grid.material.opacity = .5;
+  scene.add(grid);
+
+  const N = 1400, pos = new Float32Array(N*3);
+  for (let i=0;i<N;i++) {
+    pos[i*3]   = (Math.random()-0.5)*70;
+    pos[i*3+1] = Math.random()*16;
+    pos[i*3+2] = 40 - Math.random()*450;
+  }
+  const dg = new THREE.BufferGeometry();
+  dg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const dust = new THREE.Points(dg, new THREE.PointsMaterial({
+    color:0x6fb7ff, size:.32, transparent:true, opacity:.55,
+    blending:THREE.AdditiveBlending, depthWrite:false, sizeAttenuation:true
+  }));
+  scene.add(dust);
+  anim.dust = dust;
+}
+
+// ---------- 第一段：数据中心机房 ----------
+{
+  const rackGeo = new THREE.BoxGeometry(5.2, 9.5, 4.2);
+  const rackMat = new THREE.MeshStandardMaterial({ color:0x10161f, roughness:.55, metalness:.5 });
+  const ledGeo = new THREE.PlaneGeometry(0.42, 0.2);
+  const ledMat = new THREE.MeshBasicMaterial({ toneMapped:false });
+  const rows = [24, 10, -4, -18, -32];
+  const leds = [];
+  const rack = new THREE.Mesh(rackGeo, rackMat);
+  rows.forEach(z => {
+    [-9.5, 9.5].forEach(x => {
+      const r = rack.clone(); r.position.set(x, 4.75, z); scene.add(r);
+      // 每台机柜前面板 LED 4列 x 8行
+      for (let cx=0; cx<4; cx++) for (let cy=0; cy<8; cy++) {
+        leds.push({ x: x + (x>0?-1:1)*0 + (cx-1.5)*1.05, y: 1.4 + cy*0.95,
+                    z: z + (x>0?-2.12:2.12), flip: x>0 });
+      }
+      // 顶部灯带
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(5.0, 0.12, 0.3),
+        new THREE.MeshBasicMaterial({ color:0x38b6ff, toneMapped:false }));
+      strip.position.set(x, 9.35, z + (x>0?-1.9:1.9)); scene.add(strip);
+    });
+    // 天花板灯带
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(16, 0.25, 1.4),
+      new THREE.MeshBasicMaterial({ color:0xbfe6ff, toneMapped:false }));
+    bar.position.set(0, 11.4, z); scene.add(bar);
+  });
+  const ledMesh = new THREE.InstancedMesh(ledGeo, ledMat, leds.length);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(1,1,1), p = new THREE.Vector3();
+  const palette = [new THREE.Color(0x39ff88), new THREE.Color(0x38b6ff), new THREE.Color(0xffb347), new THREE.Color(0x38b6ff)];
+  leds.forEach((L, i) => {
+    p.set(L.x, L.y, L.z);
+    q.setFromEuler(new THREE.Euler(0, L.flip ? Math.PI : 0, 0));
+    m.compose(p, q, s); ledMesh.setMatrixAt(i, m);
+    ledMesh.setColorAt(i, palette[(Math.random()*palette.length)|0]);
+  });
+  ledMesh.instanceMatrix.needsUpdate = true;
+  if (ledMesh.instanceColor) ledMesh.instanceColor.needsUpdate = true;
+  scene.add(ledMesh);
+  anim.ledMat = ledMat;
+
+  // 远处机房纵深光点
+  const glowTex = radialTexture('rgba(56,182,255,.85)');
+  for (let i=0;i<10;i++) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map:glowTex, transparent:true,
+      opacity:.16, blending:THREE.AdditiveBlending, depthWrite:false }));
+    sp.scale.set(26, 12, 1);
+    sp.position.set((Math.random()-0.5)*20, 6, -40 - Math.random()*30);
+    scene.add(sp);
+  }
+}
+
+// ---------- 第二段：被拉出的服务器 ----------
+{
+  const g = new THREE.Group();
+  const darkMetal = new THREE.MeshStandardMaterial({ color:0x141a24, roughness:.5, metalness:.6 });
+  // 机柜框架（正面朝 +z）
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(11, 11, 3), darkMetal);
+  frame.position.set(0, 5.5, -79); g.add(frame);
+  // 被拉出的 2U 服务器托盘
+  const tray = new THREE.Group();
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(8.6, 1.9, 9), new THREE.MeshStandardMaterial({
+    color:0x1b2230, roughness:.45, metalness:.65 }));
+  tray.add(chassis);
+  // 主板
+  const board = new THREE.Mesh(new THREE.BoxGeometry(7.6, 0.18, 7.6), new THREE.MeshStandardMaterial({
+    color:0x0d3b26, roughness:.7, metalness:.2 }));
+  board.position.y = 0.6; tray.add(board);
+  // 主板上的发光芯片
+  const chipMat = new THREE.MeshBasicMaterial({ color:0x54ffd2, toneMapped:false });
+  for (let i=0;i<14;i++) {
+    const ch = new THREE.Mesh(new THREE.BoxGeometry(0.7+Math.random()*0.8, 0.22, 0.7+Math.random()*0.8), chipMat);
+    ch.position.set((Math.random()-0.5)*6.4, 0.8, (Math.random()-0.5)*6.4);
+    tray.add(ch);
+  }
+  // 内存条
+  const ramMat = new THREE.MeshStandardMaterial({ color:0x0a2a5e, roughness:.4, metalness:.4,
+    emissive:0x1a56ff, emissiveIntensity:.35 });
+  for (let i=0;i<4;i++) {
+    const ram = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.0, 0.22), ramMat);
+    ram.position.set(-2.4 + i*1.6, 1.2, -2.6); tray.add(ram);
+  }
+  // 电源风扇圆
+  const fanRing = new THREE.Mesh(new THREE.TorusGeometry(1.1, 0.16, 10, 28),
+    new THREE.MeshStandardMaterial({ color:0x2a3342, roughness:.4, metalness:.7 }));
+  fanRing.position.set(2.6, 1.1, 2.4); fanRing.rotation.x = Math.PI/2; tray.add(fanRing);
+  // 线缆
+  const cableMat = new THREE.MeshStandardMaterial({ color:0xc23b3b, roughness:.6 });
+  [[-3,2.8,0xc23b3b],[ -2.4,2.8,0x2b7de0]].forEach(([cx, cz, col]) => {
+    const curve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(cx, 0.8, -3.4), new THREE.Vector3(cx+0.7, 1.5, -1),
+      new THREE.Vector3(cx-0.4, 1.1, 1.6), new THREE.Vector3(cx, 0.9, 3.4)
+    ]);
+    const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 24, 0.09, 8),
+      new THREE.MeshStandardMaterial({ color:col, roughness:.6 }));
+    tube.position.z = cz*0; tray.add(tube);
+  });
+  tray.position.set(0, 4.4, -71.5);
+  tray.rotation.y = 0.12;
+  g.add(tray);
+  // 托盘拉出导轨光条
+  [-4.6, 4.6].forEach(x => {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 9),
+      new THREE.MeshBasicMaterial({ color:0x38b6ff, toneMapped:false }));
+    rail.position.set(x, 3.6, -73); g.add(rail);
+  });
+  scene.add(g);
+}
+
+// ---------- 第三段：Blackwell 显卡 ----------
+const gpuGroup = new THREE.Group();
+{
+  const pcbMat = new THREE.MeshStandardMaterial({ color:0x0a0e18, roughness:.55, metalness:.35 });
+  const pcb = new THREE.Mesh(new THREE.BoxGeometry(58, 2.2, 24), pcbMat);
+  gpuGroup.add(pcb);
+  // 背板文字
+  const label = new THREE.Mesh(new THREE.PlaneGeometry(38, 9.5),
+    new THREE.MeshBasicMaterial({ map:textTexture('BLACKWELL', { w:1400, h:360, fontSize:170 }), transparent:true, toneMapped:false }));
+  label.position.set(0, 0, 12.12); gpuGroup.add(label);
+  const sub = new THREE.Mesh(new THREE.PlaneGeometry(22, 4),
+    new THREE.MeshBasicMaterial({ map:textTexture('GPU · AI COMPUTE', { w:1200, h:260, fontSize:110, color:'#7a86a8', glow:'rgba(120,140,190,.5)' }), transparent:true, toneMapped:false, opacity:.9 }));
+  sub.position.set(0, -5.4, 12.12); gpuGroup.add(sub);
+  // 散热鳍片
+  const finGeo = new THREE.BoxGeometry(0.5, 9, 22);
+  const finMat = new THREE.MeshStandardMaterial({ color:0x39424f, roughness:.35, metalness:.85 });
+  const fins = new THREE.InstancedMesh(finGeo, finMat, 40);
+  { const m=new THREE.Matrix4(); for (let i=0;i<40;i++){ m.setPosition(-24+i*1.23, 5.6, 0); fins.setMatrixAt(i,m);} }
+  fins.instanceMatrix.needsUpdate = true; gpuGroup.add(fins);
+  // 双风扇
+  [-15, 15].forEach(fx => {
+    const fan = new THREE.Group();
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(7.4, 0.7, 12, 40),
+      new THREE.MeshStandardMaterial({ color:0x222b38, roughness:.4, metalness:.7 }));
+    fan.add(ring);
+    const blades = new THREE.Group();
+    const bladeMat = new THREE.MeshStandardMaterial({ color:0x3a4657, roughness:.45, metalness:.6 });
+    for (let b=0;b<9;b++) {
+      const bl = new THREE.Mesh(new THREE.BoxGeometry(5.6, 1.6, 0.28), bladeMat);
+      bl.position.x = 3.4;
+      const holder = new THREE.Group(); holder.rotation.z = b/9*Math.PI*2;
+      holder.rotation.y = 0.5; holder.add(bl); blades.add(holder);
+    }
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.1, 1.4, 24),
+      new THREE.MeshStandardMaterial({ color:0x141a24, roughness:.4, metalness:.6 }));
+    hub.rotation.x = Math.PI/2; blades.add(hub);
+    const hubGlow = new THREE.Mesh(new THREE.CircleGeometry(1.2, 24),
+      new THREE.MeshBasicMaterial({ color:0x38b6ff, toneMapped:false }));
+    hubGlow.position.z = 0.75; blades.add(hubGlow);
+    fan.add(blades); fan.position.set(fx, 0, 12.4);
+    gpuGroup.add(fan); anim.fans.push(blades);
+  });
+  // 中央芯片 + 金手指
+  const die = new THREE.Mesh(new THREE.BoxGeometry(11, 1.6, 11),
+    new THREE.MeshStandardMaterial({ color:0x0d1526, roughness:.3, metalness:.5,
+      emissive:0x123a6e, emissiveIntensity:.5 }));
+  die.position.set(0, 0, 12.6); gpuGroup.add(die);
+  const dieLabel = new THREE.Mesh(new THREE.PlaneGeometry(8.6, 2.6),
+    new THREE.MeshBasicMaterial({ map:textTexture('B200', { w:800, h:260, fontSize:150, color:'#cfe9ff' }), transparent:true, toneMapped:false }));
+  dieLabel.position.set(0, 0, 13.45); gpuGroup.add(dieLabel);
+  const pinMat = new THREE.MeshBasicMaterial({ color:0xffc861, toneMapped:false });
+  const pins = new THREE.InstancedMesh(new THREE.BoxGeometry(0.5, 0.5, 0.7), pinMat, 44);
+  { const m=new THREE.Matrix4(); let k=0;
+    for (let i=0;i<11;i++){ m.setPosition(-5+i, 3.4, 12.6); pins.setMatrixAt(k++, m);
+      m.setPosition(-5+i, -3.4, 12.6); pins.setMatrixAt(k++, m);
+      m.setPosition(6.2, 0, -5+i); pins.setMatrixAt(k++, m);
+      m.setPosition(-6.2, 0, -5+i); pins.setMatrixAt(k++, m); } }
+  pins.instanceMatrix.needsUpdate = true; gpuGroup.add(pins);
+
+  gpuGroup.position.set(0, 2, -150);
+  gpuGroup.rotation.y = -0.06;
+  scene.add(gpuGroup);
+
+  // 穿过显卡时的闪光遮罩
+  const flash = new THREE.Mesh(new THREE.PlaneGeometry(110, 70),
+    new THREE.MeshBasicMaterial({ map:flashTex, transparent:true, opacity:0,
+      blending:THREE.AdditiveBlending, depthWrite:false, toneMapped:false }));
+  flash.position.set(0, 2, -157); scene.add(flash);
+  anim.flash = flash;
+}
+
+// ---------- 第四段：芯片 Die 俯冲 ----------
+{
+  const dieBase = new THREE.Mesh(new THREE.PlaneGeometry(150, 150),
+    new THREE.MeshStandardMaterial({ color:0x06130d, roughness:.65, metalness:.35 }));
+  dieBase.rotation.x = -Math.PI/2; dieBase.position.set(0, 0, -228);
+  scene.add(dieBase);
+  // SM 计算单元阵列
+  const smGeo = new THREE.BoxGeometry(7.5, 2.6, 7.5);
+  const smMat = new THREE.MeshStandardMaterial({ color:0x0e2a1e, roughness:.5, metalness:.4,
+    emissive:0x1fbf7a, emissiveIntensity:.28 });
+  const sms = new THREE.InstancedMesh(smGeo, smMat, 100);
+  { const m=new THREE.Matrix4(); let k=0;
+    for (let ix=0; ix<10; ix++) for (let iz=0; iz<10; iz++) {
+      m.setPosition(-58.5 + ix*13, 1.3, -286.5 + iz*13); sms.setMatrixAt(k++, m);
+    } }
+  sms.instanceMatrix.needsUpdate = true; scene.add(sms);
+  anim.smMat = smMat;
+  // 中央大核心（呼吸光）
+  const core = new THREE.Mesh(new THREE.PlaneGeometry(26, 26),
+    new THREE.MeshBasicMaterial({ map:radialTexture('rgba(120,255,190,.95)', 'rgba(31,191,122,0)'),
+      transparent:true, blending:THREE.AdditiveBlending, depthWrite:false, toneMapped:false }));
+  core.rotation.x = -Math.PI/2; core.position.set(0, 0.25, -228); scene.add(core);
+  anim.core = core;
+  // 金色电路走线（随机曼哈顿折线）
+  const pts = [];
+  for (let i=0;i<70;i++) {
+    let x = (Math.random()-0.5)*140, z = -228 + (Math.random()-0.5)*140;
+    pts.push(x, 0.18, z);
+    for (let s=0;s<4;s++) {
+      if (Math.random()<0.5) x += (Math.random()-0.5)*36; else z += (Math.random()-0.5)*36;
+      x = Math.max(-70, Math.min(70, x)); z = Math.max(-298, Math.min(-158, z));
+      pts.push(x, 0.18, z); pts.push(x, 0.18, z);
+    }
+    pts.pop(); pts.pop(); pts.pop();
+  }
+  const tg = new THREE.BufferGeometry();
+  tg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts), 3));
+  scene.add(new THREE.LineSegments(tg, new THREE.LineBasicMaterial({
+    color:0xd9a441, transparent:true, opacity:.75 })));
+  // Die 边缘发光框
+  const frame = new THREE.Mesh(new THREE.PlaneGeometry(152, 152),
+    new THREE.MeshBasicMaterial({ color:0x1fbf7a, transparent:true, opacity:.14,
+      blending:THREE.AdditiveBlending, depthWrite:false, toneMapped:false, side:THREE.DoubleSide }));
+  frame.rotation.x = -Math.PI/2; frame.position.set(0, 0.1, -228); scene.add(frame);
+}
+
+// ---------- 第五段：晶体管森林 ----------
+{
+  const finGeo = new THREE.BoxGeometry(1.3, 7.5, 0.9);
+  const finMat = new THREE.MeshStandardMaterial({ color:0x0c1c30, roughness:.45, metalness:.5,
+    emissive:0x2288dd, emissiveIntensity:.4 });
+  const cols = 26, rowsN = 12, fins = new THREE.InstancedMesh(finGeo, finMat, cols*rowsN);
+  { const m=new THREE.Matrix4(), c=new THREE.Color(); let k=0;
+    for (let ix=0; ix<cols; ix++) for (let iz=0; iz<rowsN; iz++) {
+      m.setPosition(-62.5 + ix*5, 3.75, -322 + iz*5.4); fins.setMatrixAt(k, m);
+      c.setHSL(0.52 + Math.random()*0.08, 0.9, 0.35 + Math.random()*0.25);
+      fins.setColorAt(k, c); k++;
+    } }
+  fins.instanceMatrix.needsUpdate = true;
+  if (fins.instanceColor) fins.instanceColor.needsUpdate = true;
+  scene.add(fins);
+  // 栅极横杆
+  const gateMat = new THREE.MeshBasicMaterial({ color:0x9fe6ff, toneMapped:false, transparent:true, opacity:.8 });
+  for (let iz=0; iz<rowsN; iz++) {
+    const gate = new THREE.Mesh(new THREE.BoxGeometry(132, 0.5, 0.7), gateMat);
+    gate.position.set(0, 5.2, -322 + iz*5.4); scene.add(gate);
+  }
+  // 鳍尖光点
+  const tipGeo = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+  const tipMat = new THREE.MeshBasicMaterial({ color:0xbff3ff, toneMapped:false });
+  const tips = new THREE.InstancedMesh(tipGeo, tipMat, cols*rowsN);
+  { const m=new THREE.Matrix4(); let k=0;
+    for (let ix=0; ix<cols; ix++) for (let iz=0; iz<rowsN; iz++) {
+      m.setPosition(-62.5 + ix*5, 7.75, -322 + iz*5.4); tips.setMatrixAt(k++, m);
+    } }
+  tips.instanceMatrix.needsUpdate = true; scene.add(tips);
+  anim.tipMat = tipMat;
+}
+
+// ---------- 第六段：硅原子 ----------
+const atomCenter = new THREE.Vector3(0, 2, -372);
+{
+  const g = new THREE.Group();
+  // 原子核
+  const nucleus = new THREE.Mesh(new THREE.SphereGeometry(5, 40, 28),
+    new THREE.MeshStandardMaterial({ color:0xff8c2a, roughness:.35, metalness:.2,
+      emissive:0xff5a00, emissiveIntensity:.5 }));
+  g.add(nucleus);
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map:flashTex, color:0xff9a3d,
+    transparent:true, opacity:.35, blending:THREE.AdditiveBlending, depthWrite:false }));
+  halo.scale.set(20, 20, 1); g.add(halo);
+  // 电子层定义：硅 2 / 8 / 4
+  const shellDefs = [
+    { r:11,   n:2, speed:1.5, tilt:[0.5, 0.2, 0.1],  color:0x9fe6ff },
+    { r:15.5, n:8, speed:1.0, tilt:[-0.4, 0.5, 0.3], color:0x7ab8ff },
+    { r:20,   n:4, speed:0.7, tilt:[0.3, -0.6, 0.45],color:0x5c8cff },
+  ];
+  const eGeo = new THREE.SphereGeometry(0.75, 18, 14);
+  shellDefs.forEach(sd => {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(sd.r, 0.14, 8, 90),
+      new THREE.MeshBasicMaterial({ color:sd.color, transparent:true, opacity:.35, toneMapped:false }));
+    ring.rotation.set(sd.tilt[0], sd.tilt[1], sd.tilt[2]);
+    g.add(ring);
+    const u = new THREE.Vector3(1,0,0).applyEuler(ring.rotation);
+    const v = new THREE.Vector3(0,1,0).applyEuler(ring.rotation);
+    const eMesh = new THREE.InstancedMesh(eGeo,
+      new THREE.MeshBasicMaterial({ color:0xd8f4ff, toneMapped:false }), sd.n);
+    const rec = { mesh:eMesh, r:sd.r, speed:sd.speed, u, v, n:sd.n,
+                  phases:Array.from({length:sd.n}, (_,i)=> i/sd.n*Math.PI*2) };
+    anim.electrons.push(rec); g.add(eMesh);
+  });
+  g.position.copy(atomCenter);
+  scene.add(g);
+  // 周围星尘
+  const N=500, pos=new Float32Array(N*3);
+  for (let i=0;i<N;i++){
+    const th=Math.random()*Math.PI*2, ph=Math.acos(2*Math.random()-1), rr=26+Math.random()*26;
+    pos[i*3]=atomCenter.x+rr*Math.sin(ph)*Math.cos(th);
+    pos[i*3+1]=atomCenter.y+rr*Math.sin(ph)*Math.sin(th)*0.7;
+    pos[i*3+2]=atomCenter.z+rr*Math.cos(ph);
+  }
+  const sg=new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.BufferAttribute(pos,3));
+  scene.add(new THREE.Points(sg, new THREE.PointsMaterial({ color:0x8fb8ff, size:.4,
+    transparent:true, opacity:.6, blending:THREE.AdditiveBlending, depthWrite:false })));
+}
+
+// ---------- 相机旅程时间线 ----------
+const T_MAIN = 44, T_ORBIT = 10, TOTAL = T_MAIN + T_ORBIT;
+const posCurve = new THREE.CatmullRomCurve3([
+  [0,7,34],[0,6,12],[1,5,-8],[4,4.5,-34],[2,4,-58],[-1,3.5,-72],[0,3,-88],
+  [-4,2.5,-108],[-8,2,-128],[-10,6.5,-146],[-8,6.2,-162],[0,2,-176],
+  [0,5,-196],[0,6,-214],[0,5,-236],[0,4,-258],[0,3.5,-282],[0,3,-306],[0,3,-330],[0,5,-348]
+].map(p => new THREE.Vector3(...p)));
+const lookCurve = new THREE.CatmullRomCurve3([
+  [0,5,0],[0,4,-20],[0,4,-40],[-2,3,-60],[0,3,-80],[0,2.5,-92],[2,2,-112],
+  [0,2.5,-140],[-2,2,-158],[4,1,-162],[0,1,-180],[0,1.5,-200],
+  [0,1,-222],[0,1,-244],[0,2,-266],[0,2,-290],[0,2,-314],[0,2,-340],[0,2,-362],[0,2,-372]
+].map(p => new THREE.Vector3(...p)));
+
+const chapters = [
+  { t0:0,   t1:7,  t:'数据中心',   s:'算力的心脏在这里跳动' },
+  { t0:7,   t1:13, t:'走近机架',   s:'打开一台服务器' },
+  { t0:13,  t1:20, t:'拆下显卡',   s:'NVIDIA Blackwell' },
+  { t0:20,  t1:27, t:'穿越芯片',   s:'深入硅片内部' },
+  { t0:27,  t1:34, t:'晶体管森林', s:'数百亿个开关同时开合' },
+  { t0:34,  t1:44, t:'抵达硅原子', s:'世界的最小砖块' },
+  { t0:44,  t1:99, t:'',           s:'' },
+];
+
+const captionEl = document.getElementById('caption');
+const capT = captionEl.querySelector('.t'), capS = captionEl.querySelector('.s');
+const progressEl = document.getElementById('progress');
+let curChapter = -1;
+function updateCaption(t) {
+  const i = chapters.findIndex(c => t >= c.t0 && t < c.t1);
+  if (i !== curChapter) {
+    curChapter = i;
+    if (i >= 0 && chapters[i].t) {
+      captionEl.style.opacity = 0;
+      setTimeout(() => {
+        capT.textContent = chapters[i].t; capS.textContent = chapters[i].s;
+        captionEl.style.opacity = 1;
+      }, 320);
+    } else captionEl.style.opacity = 0;
+  }
+  progressEl.style.width = Math.min(100, t / TOTAL * 100) + '%';
+}
+
+// ---------- 环境音 ----------
+let audioCtx = null, masterGain = null, whooshGain = null, muted = false;
+function initAudio() {
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain(); masterGain.gain.value = 0.5;
+    masterGain.connect(audioCtx.destination);
+    // 低沉底噪
+    const droneGain = audioCtx.createGain(); droneGain.gain.value = 0.10;
+    const lp = audioCtx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value = 260;
+    [48, 72.5].forEach(f => {
+      const o = audioCtx.createOscillator(); o.type='sine'; o.frequency.value = f;
+      o.connect(droneGain); o.start();
+    });
+    droneGain.connect(lp); lp.connect(masterGain);
+    // 穿梭风声（跟随速度）
+    const len = audioCtx.sampleRate * 2;
+    const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i=0;i<len;i++) d[i] = Math.random()*2-1;
+    const noise = audioCtx.createBufferSource(); noise.buffer = buf; noise.loop = true;
+    const bp = audioCtx.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value = 480; bp.Q.value = 0.6;
+    whooshGain = audioCtx.createGain(); whooshGain.gain.value = 0;
+    noise.connect(bp); bp.connect(whooshGain); whooshGain.connect(masterGain);
+    noise.start();
+  } catch(e) { /* 无音频也继续 */ }
+}
+const muteBtn = document.getElementById('muteBtn');
+muteBtn.addEventListener('click', () => {
+  muted = !muted;
+  if (masterGain) masterGain.gain.value = muted ? 0 : 0.5;
+  muteBtn.textContent = muted ? '🔇' : '🔊';
+});
+
+// ---------- 流程控制 ----------
+let started = false, startTime = 0, finished = false;
+const startOverlay = document.getElementById('start');
+const endOverlay = document.getElementById('end');
+document.getElementById('startBtn').addEventListener('click', () => {
+  startOverlay.style.display = 'none';
+  muteBtn.style.display = 'flex';
+  document.getElementById('hint').style.display = 'none';
+  initAudio();
+  started = true; finished = false; startTime = performance.now();
+});
+document.getElementById('replayBtn').addEventListener('click', () => {
+  endOverlay.style.display = 'none';
+  finished = false; curChapter = -1; startTime = performance.now();
+});
+
+const tmpV = new THREE.Vector3(), tmpL = new THREE.Vector3();
+const m4 = new THREE.Matrix4();
+const clock = new THREE.Clock();
+let prevCamPos = new THREE.Vector3();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+
+  // 常驻动画：风扇 / 电子 / 呼吸光 / 尘埃
+  anim.fans.forEach((f, i) => { f.rotation.z -= dt * (2.2 + i*0.7); });
+  anim.electrons.forEach(rec => {
+    for (let i=0;i<rec.n;i++) {
+      const a = t * rec.speed + rec.phases[i];
+      tmpV.set(0,0,0)
+        .addScaledVector(rec.u, Math.cos(a)*rec.r)
+        .addScaledVector(rec.v, Math.sin(a)*rec.r);
+      m4.makeTranslation(tmpV.x, tmpV.y, tmpV.z);
+      rec.mesh.setMatrixAt(i, m4);
+    }
+    rec.mesh.instanceMatrix.needsUpdate = true;
+  });
+  if (anim.core) anim.core.material.opacity = 0.75 + Math.sin(t*2.2)*0.2;
+  if (anim.smMat) anim.smMat.emissiveIntensity = 0.28 + Math.sin(t*3.1)*0.12;
+  if (anim.ledMat) anim.ledMat.color.setHSL(0.55, 0.1, 0.85); // 保持高亮
+  if (anim.dust) anim.dust.rotation.y = t * 0.004;
+  if (anim.tipMat) anim.tipMat.color.setHSL(0.53, 0.9, 0.6 + Math.sin(t*4)*0.15);
+
+  if (started && !finished) {
+    const et = (performance.now() - startTime) / 1000;
+    if (et >= TOTAL) {
+      finished = true;
+      endOverlay.style.display = 'flex';
+      captionEl.style.opacity = 0;
+      progressEl.style.width = '100%';
+    } else {
+      updateCaption(et);
+      if (et < T_MAIN) {
+        const u = Math.min(1, et / T_MAIN);
+        posCurve.getPoint(u, tmpV); lookCurve.getPoint(u, tmpL);
+        camera.position.copy(tmpV); camera.lookAt(tmpL);
+      } else {
+        // 尾声：环绕原子
+        const ot = et - T_MAIN;
+        const a = 0.35 + ot * 0.42;
+        camera.position.set(
+          atomCenter.x + Math.sin(a)*27,
+          atomCenter.y + 5 + Math.sin(ot*0.5)*2.5,
+          atomCenter.z + Math.cos(a)*27
+        );
+        camera.lookAt(atomCenter);
+      }
+      // 穿过显卡的闪光
+      const dz = camera.position.z - (-157);
+      anim.flash.material.opacity = Math.max(0, 1 - Math.abs(dz)/14) * 0.95;
+      anim.flash.lookAt(camera.position);
+      // 风声跟随速度
+      if (whooshGain && audioCtx) {
+        const sp = camera.position.distanceTo(prevCamPos) / Math.max(dt, 0.001);
+        const target = Math.min(0.22, sp * 0.006);
+        whooshGain.gain.value += (target - whooshGain.gain.value) * 0.1;
+      }
+    }
+    prevCamPos.copy(camera.position);
+  }
+  composer.render();
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
